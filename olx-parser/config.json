@@ -11,7 +11,9 @@
     ],
     "poll_interval_seconds": 300,
     "max_price_uah": 18000,
-    "max_results_per_query": 500
+    "max_results_per_query": 500,
+    "max_age_hours": 48,
+    "max_sends_per_run": 25
   },
   "include_unspecified_thinkpad": true,
   "send_existing_on_first_run": false,
