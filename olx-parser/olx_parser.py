@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -277,6 +278,15 @@ def run_once(cfg: dict, seen: set, first_run: bool, dry_run: bool = False) -> in
     # In dry-run we always "notify" (print) so you can see matches immediately.
     notify = dry_run or (not first_run) or send_existing
 
+    # Only listings posted on OLX within this window are eligible to be sent.
+    # This is what makes the broad search safe: the old backlog that "churns"
+    # into the result window is ignored by date, so it never floods.
+    max_age_hours = cfg["search"].get("max_age_hours")
+    cutoff = None
+    if max_age_hours:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    max_sends = cfg["search"].get("max_sends_per_run", 25)
+
     queries = cfg["search"].get("queries") or [cfg["search"].get("query", "thinkpad")]
     max_results = cfg["search"].get("max_results_per_query")
     offers = fetch_all(queries, max_price, max_results)
@@ -287,6 +297,17 @@ def run_once(cfg: dict, seen: set, first_run: bool, dry_run: bool = False) -> in
         oid = offer.get("id")
         if oid is None or oid in seen:
             continue
+
+        # Ignore the old backlog entirely: only recently-posted listings can be
+        # sent. Hard stop against "old listing churns into the result window".
+        if cutoff is not None:
+            ct = offer.get("created_time")
+            try:
+                if ct and datetime.fromisoformat(ct) < cutoff:
+                    seen.add(oid)
+                    continue
+            except ValueError:
+                pass
 
         title = offer.get("title", "")
         title_l = title.lower()
@@ -323,6 +344,13 @@ def run_once(cfg: dict, seen: set, first_run: bool, dry_run: bool = False) -> in
                 continue
 
         if notify:
+            # Safety net: never blast more than max_sends in one poll. If hit,
+            # stop without marking the rest seen — they come next run, a few
+            # at a time, instead of flooding.
+            if not dry_run and new_count >= max_sends:
+                log.warning("hit max_sends_per_run (%d); stopping this poll early",
+                            max_sends)
+                break
             message = format_message(model_name, offer, spec, broken)
             if dry_run:
                 log.info("[DRY-RUN] would send:\n%s", message)
