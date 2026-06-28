@@ -96,11 +96,12 @@ def detect_gen(title: str) -> int | None:
     """
     t = title.lower()
     patterns = [
-        r"gen[\s\-]?(\d{1,2})",
-        r"\bg(\d{1,2})\b",
-        r"(\d{1,2})\s*(?:th|nd|rd|st)?\s*gen",
-        # number right after "carbon", incl. odd ordinals like "carbon 3th"
+        # number right after "carbon" is the most reliable gen for X1 Carbon
+        # ("carbon 7", "carbon 3th") — checked first so "7 Gen 14\"" reads 7, not 14
         r"carbon[\s\-]+(\d{1,2})(?:th|st|nd|rd)?\b",
+        r"(\d{1,2})\s*(?:th|nd|rd|st)?\s*gen",   # "7 Gen", "9th gen"
+        r"gen[\s\-]?(\d{1,2})",                   # "Gen 9"
+        r"\bg(\d{1,2})\b",                        # "G10"
     ]
     for pat in patterns:
         m = re.search(pat, t)
@@ -109,18 +110,52 @@ def detect_gen(title: str) -> int | None:
     return None
 
 
-def match_model(title: str, models: list, exclude_keywords: list = ()) -> str | None:
-    """Return the friendly model name if the title matches one of our targets.
+# Any recognizable ThinkPad model code, e.g. t490, x13, e15, l14, p14s, a285,
+# w541, z13, plus the named lines. Used to tell "model specified" from a generic
+# "Lenovo ThinkPad" listing with no model in the title.
+HAS_MODEL_CODE = re.compile(
+    r"(?<![a-z0-9])(?:[txelpwra]\d{2,4}[a-z]{0,2}|x1|p1|z1[36]|11e|"
+    r"yoga|carbon|nano|extreme|helix)(?![a-z0-9])"
+)
 
-    Listings whose title contains a global exclude keyword (parts, chargers,
-    broken units, etc.) are skipped entirely.
+
+def _kw_present(keyword: str, text: str) -> bool:
+    """Match a keyword as a whole model token.
+
+    Not preceded by a letter/digit and not followed by a digit, so "x1" matches
+    "x1 carbon"/"x1carbon"/"x1 yoga" but NOT "x13"; "t14" still matches "t14s"
+    (which the model's exclude list then handles).
+    """
+    return re.search(r"(?<![a-z0-9])" + re.escape(keyword) + r"(?!\d)", text) is not None
+
+
+X1_VARIANTS = ["carbon", "yoga", "nano", "extreme", "tablet"]
+
+
+def detect_model_name(title: str) -> str:
+    """Best-effort friendly model from a title, for blocklist mode.
+
+    e.g. "ThinkPad X1 Carbon", "ThinkPad T16", "ThinkPad P14s". Falls back to
+    "ThinkPad (модель не вказана)" when no model code is present.
     """
     t = title.lower()
-    if any(kw in t for kw in exclude_keywords):
-        return None
+    if _kw_present("x1", t):
+        for v in X1_VARIANTS:
+            if v in t:
+                return f"ThinkPad X1 {v.capitalize()}"
+        return "ThinkPad X1"
+    m = re.search(r"(?<![a-z0-9])([txelpwra]\d{2,4}[a-z]{0,2})(?![a-z0-9])", t)
+    if m:
+        return f"ThinkPad {m.group(1).upper()}"
+    return "ThinkPad (модель не вказана)"
+
+
+def match_model(title: str, models: list) -> str | None:
+    """Return the friendly model name if the title matches one of our targets."""
+    t = title.lower()
     for model in models:
-        if any(kw in t for kw in model.get("include", [])):
-            if any(kw in t for kw in model.get("exclude", [])):
+        if any(_kw_present(kw, t) for kw in model.get("include", [])):
+            if any(_kw_present(kw, t) for kw in model.get("exclude", [])):
                 continue
             min_gen = model.get("min_gen")
             if min_gen is not None:
@@ -144,25 +179,49 @@ def get_price(offer: dict):
     return None, ""
 
 
-def fetch_offers(query: str) -> list:
-    """Page through OLX search results for the query and return all offers."""
+def fetch_offers(query: str, max_price=None, max_results=None) -> list:
+    """Page through OLX search results for one query and return its offers.
+
+    OLX caps pagination at ~1040 results and ignores `limit` (returns a variable
+    page size), so offsets advance by the real batch length. The price filter
+    (filter_float_price:to) shrinks the set server-side. `max_results` bounds how
+    deep we page per run: new listings surface near the top, so a few hundred is
+    enough to catch them cheaply while keeping each poll fast.
+    """
+    limit = min(MAX_OFFSET, max_results or MAX_OFFSET)
     offers, offset = [], 0
-    while offset < MAX_OFFSET:
+    while offset < limit:
         params = {"offset": offset, "limit": PAGE_LIMIT, "query": query}
+        if max_price is not None:
+            params["filter_float_price:to"] = max_price
         try:
             r = requests.get(API_URL, params=params, headers=HTTP_HEADERS, timeout=30)
             r.raise_for_status()
             batch = r.json().get("data", [])
         except (requests.RequestException, ValueError) as exc:
-            log.warning("fetch failed at offset %d: %s", offset, exc)
+            log.warning("fetch failed (%s) at offset %d: %s", query, offset, exc)
             break
         if not batch:
             break
         offers.extend(batch)
-        if len(batch) < PAGE_LIMIT:
-            break
-        offset += PAGE_LIMIT
-        time.sleep(0.5)  # be polite to OLX
+        offset += len(batch)
+        time.sleep(0.3)  # be polite to OLX
+    return offers
+
+
+def fetch_all(queries: list, max_price=None, max_results=None) -> list:
+    """Run every query, de-duplicate by id, and return newest-first.
+
+    OLX has no reliable date sort, so we sort client-side on created_time.
+    """
+    by_id = {}
+    for q in queries:
+        for o in fetch_offers(q, max_price, max_results):
+            oid = o.get("id")
+            if oid is not None and oid not in by_id:
+                by_id[oid] = o
+    offers = list(by_id.values())
+    offers.sort(key=lambda o: o.get("created_time") or "", reverse=True)
     return offers
 
 
@@ -194,28 +253,33 @@ def strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def format_message(model_name: str, offer: dict) -> str:
-    price_val, price_label = get_price(offer)
+def esc(text: str) -> str:
+    """Escape the characters Telegram's HTML parse mode cares about."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def format_message(model_name: str, offer: dict, spec: dict, broken: bool = False) -> str:
+    _, price_label = get_price(offer)
     title = offer.get("title", "ThinkPad")
     url = offer.get("url", "")
-    price_line = price_label or "Ціна не вказана"
 
-    # Parse specs from the title first, falling back to the description.
-    spec = specs.parse_specs(title, strip_html(offer.get("description", "")))
-    spec_bits = []
-    if spec["cpu"]:
-        spec_bits.append(f"🧠 {spec['cpu']}")
-    if spec["ram"]:
-        spec_bits.append(f"📦 {spec['ram']} RAM")
-    if spec["storage"]:
-        spec_bits.append(f"💾 {spec['storage']}")
-    spec_line = ("\n" + "  ".join(spec_bits)) if spec_bits else ""
+    # A monospace "table"; missing values are left blank.
+    rows = [
+        ("CPU", spec.get("cpu") or ""),
+        ("RAM", spec.get("ram") or ""),
+        ("Storage", spec.get("storage") or ""),
+        ("Price", price_label or ""),
+    ]
+    table = "\n".join(f"{label:<8} {value}" for label, value in rows)
+
+    header = f"💻 <b>{esc(model_name)}</b>"
+    if broken:
+        header += "  🔧 <b>НА ЗАПЧАСТИНИ / НЕСПРАВНИЙ</b>"
 
     return (
-        f"💻 <b>{model_name}</b>\n"
-        f"{title}"
-        f"{spec_line}\n"
-        f"💰 {price_line}\n"
+        f"{header}\n"
+        f"{esc(title)}\n"
+        f"<pre>{esc(table)}</pre>\n"
         f"{url}"
     )
 
@@ -225,14 +289,21 @@ def format_message(model_name: str, offer: dict) -> str:
 # --------------------------------------------------------------------------- #
 def run_once(cfg: dict, seen: set, first_run: bool, dry_run: bool = False) -> int:
     models = cfg["models"]
-    exclude_keywords = cfg.get("exclude_keywords", [])
+    match_mode = cfg.get("match_mode", "allowlist")
+    exclude_models = [m.lower() for m in cfg.get("exclude_models", [])]
+    parts_keywords = cfg.get("parts_keywords", [])
+    broken_keywords = cfg.get("broken_keywords", [])
+    include_unspecified = cfg.get("include_unspecified_thinkpad", False)
+    exclude_cpus = [c.lower() for c in cfg.get("exclude_cpus", [])]
     max_price = cfg["search"].get("max_price_uah")
     send_existing = cfg.get("send_existing_on_first_run", True)
     # In dry-run we always "notify" (print) so you can see matches immediately.
     notify = dry_run or (not first_run) or send_existing
 
-    offers = fetch_offers(cfg["search"]["query"])
-    log.info("fetched %d offers", len(offers))
+    queries = cfg["search"].get("queries") or [cfg["search"].get("query", "thinkpad")]
+    max_results = cfg["search"].get("max_results_per_query")
+    offers = fetch_all(queries, max_price, max_results)
+    log.info("fetched %d unique offers (newest first)", len(offers))
 
     new_count = 0
     for offer in offers:
@@ -240,9 +311,44 @@ def run_once(cfg: dict, seen: set, first_run: bool, dry_run: bool = False) -> in
         if oid is None or oid in seen:
             continue
 
-        model_name = match_model(offer.get("title", ""), models, exclude_keywords)
-        if not model_name:
-            seen.add(oid)  # remember non-matches too, so we don't re-check them
+        title = offer.get("title", "")
+        title_l = title.lower()
+
+        # Pure component listings (a keyboard, screen, charger...) are not laptops.
+        if any(kw in title_l for kw in parts_keywords):
+            seen.add(oid)
+            continue
+
+        if match_mode == "blocklist":
+            # Show any ThinkPad except the blocked models.
+            if any(_kw_present(m, title_l) for m in exclude_models):
+                seen.add(oid)
+                continue
+            model_name = detect_model_name(title)
+            is_unspecified = model_name == "ThinkPad (модель не вказана)"
+            looks_thinkpad = "thinkpad" in title_l or not is_unspecified
+            if not looks_thinkpad or (is_unspecified and not include_unspecified):
+                seen.add(oid)
+                continue
+        else:
+            # allowlist mode: only the configured target models (+ optional generic)
+            model_name = match_model(title, models)
+            if not model_name:
+                if include_unspecified and "thinkpad" in title_l \
+                        and not HAS_MODEL_CODE.search(title_l):
+                    model_name = "ThinkPad (модель не вказана)"
+                else:
+                    seen.add(oid)
+                    continue
+
+        # Whole-but-broken laptops are kept and flagged (repair/resale candidates).
+        broken = any(kw in title_l for kw in broken_keywords)
+
+        spec = specs.parse_specs(title, strip_html(offer.get("description", "")))
+
+        # Skip listings whose CPU is on the blocklist (e.g. older/weaker chips).
+        if spec["cpu"] and spec["cpu"].lower() in exclude_cpus:
+            seen.add(oid)
             continue
 
         if max_price is not None:
@@ -252,7 +358,7 @@ def run_once(cfg: dict, seen: set, first_run: bool, dry_run: bool = False) -> in
                 continue
 
         if notify:
-            message = format_message(model_name, offer)
+            message = format_message(model_name, offer, spec, broken)
             if dry_run:
                 log.info("[DRY-RUN] would send:\n%s", message)
                 new_count += 1
@@ -294,8 +400,8 @@ def main() -> None:
         log.info("ONCE done: %d new listing(s) sent", sent)
         return
 
-    log.info("OLX ThinkPad watcher started (query=%r, interval=%ds, first_run=%s)",
-             cfg["search"]["query"], interval, first_run)
+    log.info("OLX ThinkPad watcher started (interval=%ds, first_run=%s)",
+             interval, first_run)
 
     while True:
         try:
