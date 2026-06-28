@@ -1,0 +1,24 @@
+{
+  "telegram": {
+    "bot_token": "PUT_YOUR_BOT_TOKEN_HERE",
+    "chat_id": "PUT_YOUR_CHAT_ID_HERE"
+  },
+  "search": {
+    "query": "thinkpad",
+    "poll_interval_seconds": 300,
+    "max_price_uah": 18000
+  },
+  "send_existing_on_first_run": false,
+  "exclude_keywords": [
+    "запчаст", "разбор", "розбор", "донор", "клавиатур", "клавіатур",
+    "матриц", "корпус", "зарядк", "зарядн", "блок питания", "блок живлення",
+    "крышка", "кришка", "петли", "петлі", "аккумулятор", "акумулятор",
+    "по запчаст", "не работает", "не працює", "на запчаст"
+  ],
+  "models": [
+    {"name": "ThinkPad T14",  "include": ["t14"],          "exclude": ["t14s"]},
+    {"name": "ThinkPad T14s", "include": ["t14s"],         "exclude": []},
+    {"name": "ThinkPad E14",  "include": ["e14"],          "exclude": []},
+    {"name": "ThinkPad X1 Carbon Gen 9+", "include": ["x1 carbon", "x1carbon"], "exclude": [], "min_gen": 9}
+  ]
+}
