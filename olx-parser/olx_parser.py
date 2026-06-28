@@ -129,27 +129,6 @@ def _kw_present(keyword: str, text: str) -> bool:
     return re.search(r"(?<![a-z0-9])" + re.escape(keyword) + r"(?!\d)", text) is not None
 
 
-X1_VARIANTS = ["carbon", "yoga", "nano", "extreme", "tablet"]
-
-
-def detect_model_name(title: str) -> str:
-    """Best-effort friendly model from a title, for blocklist mode.
-
-    e.g. "ThinkPad X1 Carbon", "ThinkPad T16", "ThinkPad P14s". Falls back to
-    "ThinkPad (модель не вказана)" when no model code is present.
-    """
-    t = title.lower()
-    if _kw_present("x1", t):
-        for v in X1_VARIANTS:
-            if v in t:
-                return f"ThinkPad X1 {v.capitalize()}"
-        return "ThinkPad X1"
-    m = re.search(r"(?<![a-z0-9])([txelpwra]\d{2,4}[a-z]{0,2})(?![a-z0-9])", t)
-    if m:
-        return f"ThinkPad {m.group(1).upper()}"
-    return "ThinkPad (модель не вказана)"
-
-
 def match_model(title: str, models: list) -> str | None:
     """Return the friendly model name if the title matches one of our targets."""
     t = title.lower()
@@ -289,8 +268,6 @@ def format_message(model_name: str, offer: dict, spec: dict, broken: bool = Fals
 # --------------------------------------------------------------------------- #
 def run_once(cfg: dict, seen: set, first_run: bool, dry_run: bool = False) -> int:
     models = cfg["models"]
-    match_mode = cfg.get("match_mode", "allowlist")
-    exclude_models = [m.lower() for m in cfg.get("exclude_models", [])]
     parts_keywords = cfg.get("parts_keywords", [])
     broken_keywords = cfg.get("broken_keywords", [])
     include_unspecified = cfg.get("include_unspecified_thinkpad", False)
@@ -319,27 +296,15 @@ def run_once(cfg: dict, seen: set, first_run: bool, dry_run: bool = False) -> in
             seen.add(oid)
             continue
 
-        if match_mode == "blocklist":
-            # Show any ThinkPad except the blocked models.
-            if any(_kw_present(m, title_l) for m in exclude_models):
-                seen.add(oid)
+        model_name = match_model(title, models)
+        if not model_name:
+            # Generic "Lenovo ThinkPad" with no model in the title -> still show.
+            if include_unspecified and "thinkpad" in title_l \
+                    and not HAS_MODEL_CODE.search(title_l):
+                model_name = "ThinkPad (модель не вказана)"
+            else:
+                seen.add(oid)  # remember non-matches so we don't re-check them
                 continue
-            model_name = detect_model_name(title)
-            is_unspecified = model_name == "ThinkPad (модель не вказана)"
-            looks_thinkpad = "thinkpad" in title_l or not is_unspecified
-            if not looks_thinkpad or (is_unspecified and not include_unspecified):
-                seen.add(oid)
-                continue
-        else:
-            # allowlist mode: only the configured target models (+ optional generic)
-            model_name = match_model(title, models)
-            if not model_name:
-                if include_unspecified and "thinkpad" in title_l \
-                        and not HAS_MODEL_CODE.search(title_l):
-                    model_name = "ThinkPad (модель не вказана)"
-                else:
-                    seen.add(oid)
-                    continue
 
         # Whole-but-broken laptops are kept and flagged (repair/resale candidates).
         broken = any(kw in title_l for kw in broken_keywords)
