@@ -13,7 +13,7 @@
     "max_price_uah": 18000,
     "max_results_per_query": 500
   },
-  "match_mode": "blocklist",
+  "match_mode": "allowlist",
   "exclude_models": ["l13", "x13", "l14", "t450", "t470", "t480", "t490"],
   "include_unspecified_thinkpad": true,
   "send_existing_on_first_run": false,
