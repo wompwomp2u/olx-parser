@@ -4,21 +4,37 @@
     "chat_id": "PUT_YOUR_CHAT_ID_HERE"
   },
   "search": {
-    "query": "thinkpad",
+    "queries": [
+      "thinkpad t14", "thinkpad t14s", "thinkpad e14", "thinkpad x1",
+      "lenovo t14", "lenovo t14s", "lenovo e14", "lenovo x1",
+      "thinkpad"
+    ],
     "poll_interval_seconds": 300,
-    "max_price_uah": 18000
+    "max_price_uah": 18000,
+    "max_results_per_query": 500
   },
+  "match_mode": "blocklist",
+  "exclude_models": ["l13", "x13", "l14", "t450", "t470", "t480", "t490"],
+  "include_unspecified_thinkpad": true,
   "send_existing_on_first_run": false,
-  "exclude_keywords": [
-    "запчаст", "разбор", "розбор", "донор", "клавиатур", "клавіатур",
-    "матриц", "корпус", "зарядк", "зарядн", "блок питания", "блок живлення",
-    "крышка", "кришка", "петли", "петлі", "аккумулятор", "акумулятор",
-    "по запчаст", "не работает", "не працює", "на запчаст"
+  "exclude_cpus": ["i5-10210u", "i5-1185g7", "i5-10310u", "i5-1145G7"],
+  "parts_keywords": [
+    "клавиатур", "клавіатур", "матриц", "корпус", "зарядк", "зарядн",
+    "блок питания", "блок живлення", "крышка", "кришка", "петли", "петлі",
+    "аккумулятор", "акумулятор", "кулер", "вентилятор", "шлейф",
+    "динамик", "динамік", "тачпад", "материнськ", "материнск",
+    "док-стан", "докин", "докін", "docking", "реплікатор", "репликатор",
+    "сумка", "рюкзак", "чохол", "чехол", "стилус", "наклейк"
+  ],
+  "broken_keywords": [
+    "запчаст", "разбор", "розбор", "розбір", "донор", "не работает",
+    "не працює", "не включ", "не вмик", "неробоч", "нерабоч", "несправн",
+    "розбит", "тріснут", "на ремонт", "під ремонт"
   ],
   "models": [
     {"name": "ThinkPad T14",  "include": ["t14"],          "exclude": ["t14s"]},
     {"name": "ThinkPad T14s", "include": ["t14s"],         "exclude": []},
     {"name": "ThinkPad E14",  "include": ["e14"],          "exclude": []},
-    {"name": "ThinkPad X1 Carbon Gen 9+", "include": ["x1 carbon", "x1carbon"], "exclude": [], "min_gen": 9}
+    {"name": "ThinkPad X1", "include": ["x1"], "exclude": []}
   ]
 }
